@@ -99,44 +99,74 @@ build_cached_container() {
         $BASE_DOCKER_IMAGE \
         /bin/bash -c "
         cd /workspace && \
+        echo '🔧 Creating virtual environment...' && \
         python -m venv /workspace/venv && \
         . /workspace/venv/bin/activate && \
-        pip install --upgrade-strategy eager optimum[habana] transformers && \
+        echo '📦 Installing core packages...' && \
+        pip install --upgrade-strategy eager optimum[habana] transformers 2>&1 && \
+        echo '📦 Cloning/updating optimum-habana...' && \
         if [ -d 'optimum-habana' ]; then
             cd optimum-habana && git fetch && git checkout v1.14.0 && cd ..
         else
             git clone https://github.com/huggingface/optimum-habana && \
             cd optimum-habana && git checkout v1.14.0 && cd ..
         fi && \
-        pip install git+https://github.com/HabanaAI/DeepSpeed.git@1.18.0 && \
-        pip install -r /workspace/optimum-habana/examples/text-generation/requirements.txt && \
-        pip install -r /workspace/optimum-habana/examples/text-generation/requirements_lm_eval.txt && \
-        sleep 5"; then
+        echo '📦 Installing DeepSpeed...' && \
+        pip install git+https://github.com/HabanaAI/DeepSpeed.git@1.18.0 2>&1 && \
+        echo '📦 Installing additional requirements...' && \
+        pip install -r /workspace/optimum-habana/examples/text-generation/requirements.txt 2>&1 && \
+        pip install -r /workspace/optimum-habana/examples/text-generation/requirements_lm_eval.txt 2>&1 && \
+        echo '✅ Installation complete!'"; then
         echo "Error: Failed to start build container"
         return 1
     fi
 
-    # Wait for installation to complete
-    echo "Waiting for package installation to complete..."
-    sleep 10
+    echo -e "\n📦 Installing dependencies (this may take a few minutes)..."
+    echo "Following build progress (Ctrl+C to stop watching, build will continue):"
+    echo "================================================================================"
+    
+    # Show logs in real-time with timeout
+    docker logs -f $temp_container &
+    LOGS_PID=$!
+
+    # Function to handle Ctrl+C during build
+    build_ctrl_c() {
+        kill $LOGS_PID 2>/dev/null
+        echo -e "\n\nStopped watching build logs. Build is still running."
+        echo "To view logs again: docker logs -f $temp_container"
+    }
+
+    # Set up Ctrl+C handler
+    trap build_ctrl_c INT
+
+    # Monitor build progress
     while docker ps -q --filter "name=$temp_container" >/dev/null; do
-        sleep 5
+        if ! kill -0 $LOGS_PID 2>/dev/null; then
+            # If logs process died but container is still running, restart it
+            docker logs -f $temp_container &
+            LOGS_PID=$!
+        fi
+        sleep 2
     done
+
+    # Clean up log following
+    kill $LOGS_PID 2>/dev/null || true
+    trap - INT
 
     # Check if build was successful
     if [ "$(docker inspect -f '{{.State.ExitCode}}' $temp_container)" != "0" ]; then
-        echo "Error: Build container failed"
+        echo -e "\n❌ Build failed! Container logs:"
         docker logs $temp_container
         docker rm $temp_container
         return 1
     fi
 
     # Commit the container as a new image
-    echo "Committing container as new image: $CACHED_IMAGE_NAME"
+    echo -e "\n📦 Build successful! Creating cached image: $CACHED_IMAGE_NAME"
     docker commit $temp_container $CACHED_IMAGE_NAME
     docker rm $temp_container
     
-    echo "Successfully created cached image"
+    echo "✅ Successfully created cached image"
     return 0
 }
 
