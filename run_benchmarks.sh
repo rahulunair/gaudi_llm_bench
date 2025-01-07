@@ -1,24 +1,43 @@
 #!/bin/bash
 
 set -e  # Exit on error
+set -u  # Exit on undefined variable
+set -o pipefail  # Exit on pipe failure
 
 # Configuration
 CONTAINER_NAME="inference_perf"
 DOCKER_IMAGE="vault.habana.ai/gaudi-docker/1.18.0/ubuntu22.04/habanalabs/pytorch-installer-2.4.0:latest"
 MOUNT_PATH="/scratch-1:/mnt"
 HOME_MOUNT="/home/sdp:/root"
-TMUX_SESSION="benchmark_session"
+WORKSPACE_DIR=$(pwd)
+MIN_DISK_SPACE_GB=100  # Minimum required disk space in GB
 
-# Cleanup function
-cleanup() {
-    echo "Cleaning up..."
-    docker stop $CONTAINER_NAME 2>/dev/null || true
-    docker rm $CONTAINER_NAME 2>/dev/null || true
-    tmux kill-session -t $TMUX_SESSION 2>/dev/null || true
+echo "Running pre-flight checks..."
+
+# Function to check disk space
+check_disk_space() {
+    local path=$1
+    local available_space=$(df -BG "$path" | awk 'NR==2 {gsub("G","",$4); print $4}')
+    if [ "$available_space" -lt "$MIN_DISK_SPACE_GB" ]; then
+        echo "Error: Insufficient disk space in $path"
+        echo "Available: ${available_space}GB, Required: ${MIN_DISK_SPACE_GB}GB"
+        return 1
+    fi
+    return 0
 }
 
-# Set trap for cleanup
-trap cleanup EXIT INT TERM
+# Function to check network connectivity
+check_network() {
+    local urls=("huggingface.co" "github.com" "vault.habana.ai")
+    for url in "${urls[@]}"; do
+        if ! curl --silent --head --fail "https://${url}" >/dev/null; then
+            echo "Error: Cannot connect to ${url}"
+            echo "Please check your network connection and try again"
+            return 1
+        fi
+    done
+    return 0
+}
 
 # Check for HuggingFace token
 if [ -z "${HUGGING_FACE_HUB_TOKEN}" ]; then
@@ -28,15 +47,20 @@ if [ -z "${HUGGING_FACE_HUB_TOKEN}" ]; then
     exit 1
 fi
 
-# Check if docker is available
-if ! command -v docker &> /dev/null; then
-    echo "Error: docker is not installed or not in PATH"
+# Check if required files exist
+if [ ! -f "benchmark_config.json" ]; then
+    echo "Error: benchmark_config.json not found in current directory"
     exit 1
 fi
 
-# Check if tmux is available
-if ! command -v tmux &> /dev/null; then
-    echo "Error: tmux is not installed or not in PATH"
+if [ ! -f "run_benchmarks.py" ]; then
+    echo "Error: run_benchmarks.py not found in current directory"
+    exit 1
+fi
+
+# Check if docker is available
+if ! command -v docker &> /dev/null; then
+    echo "Error: docker is not installed or not in PATH"
     exit 1
 fi
 
@@ -77,35 +101,34 @@ if [ ! -d "/home/sdp" ]; then
     exit 1
 fi
 
-# Check if benchmark config exists
-if [ ! -f "benchmark_config.json" ]; then
-    echo "Error: benchmark_config.json not found in current directory"
+# Check disk space in critical paths
+echo "Checking disk space..."
+for path in "/scratch-1" "/home/sdp" "$WORKSPACE_DIR"; do
+    if ! check_disk_space "$path"; then
+        exit 1
+    fi
+done
+
+# Check network connectivity
+echo "Checking network connectivity..."
+if ! check_network; then
     exit 1
 fi
 
-# Check if run_benchmarks.py exists
-if [ ! -f "run_benchmarks.py" ]; then
-    echo "Error: run_benchmarks.py not found in current directory"
-    exit 1
-fi
-
-# Create a new tmux session or attach to existing one
-tmux new-session -d -s $TMUX_SESSION 2>/dev/null || true
-
-# Stop and remove existing container if it exists
-tmux send-keys -t $TMUX_SESSION "docker stop $CONTAINER_NAME 2>/dev/null || true" C-m
-tmux send-keys -t $TMUX_SESSION "docker rm $CONTAINER_NAME 2>/dev/null || true" C-m
-
-# Pull the Docker image first
+# Pull the Docker image
 echo "Pulling Docker image..."
 if ! docker pull $DOCKER_IMAGE; then
     echo "Error: Failed to pull Docker image"
     exit 1
 fi
 
-# Launch the container with all setup commands
+# Stop and remove existing container if it exists
+docker stop $CONTAINER_NAME 2>/dev/null || true
+docker rm $CONTAINER_NAME 2>/dev/null || true
+
+# Launch the container
 echo "Launching container..."
-tmux send-keys -t $TMUX_SESSION "docker run -it --runtime=habana \
+if ! docker run -d --runtime=habana \
     -e HABANA_VISIBLE_DEVICES=all \
     -e OMPI_MCA_btl_vader_single_copy_mechanism=none \
     -e HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN} \
@@ -115,10 +138,9 @@ tmux send-keys -t $TMUX_SESSION "docker run -it --runtime=habana \
     --name=$CONTAINER_NAME \
     --volume $MOUNT_PATH \
     -v $HOME_MOUNT \
-    -v $(pwd):/workspace \
+    -v $WORKSPACE_DIR:/workspace \
     $DOCKER_IMAGE \
-    /bin/bash -c \"
-    set -e && \
+    /bin/bash -c "
     cd /workspace && \
     pip install --upgrade-strategy eager optimum[habana] transformers && \
     git clone https://github.com/huggingface/optimum-habana && \
@@ -128,13 +150,57 @@ tmux send-keys -t $TMUX_SESSION "docker run -it --runtime=habana \
     pip install -r requirements.txt && \
     pip install -r requirements_lm_eval.txt && \
     export HF_HOME=/mnt/huggingface && \
-    python /workspace/run_benchmarks.py\"" C-m
+    python /workspace/run_benchmarks.py 2>&1 | tee /workspace/benchmark.log"; then
+    
+    echo "Error: Failed to start container"
+    exit 1
+fi
 
-echo "Benchmark session started in tmux. To attach to the session:"
-echo "tmux attach-session -t $TMUX_SESSION"
+echo -e "\nContainer started. Use these commands to monitor progress:"
+echo "1. View live container logs:"
+echo "   docker logs -f $CONTAINER_NAME"
 echo ""
-echo "To detach from the session once attached: press Ctrl+B, then D"
-echo "To view session output later: tmux attach-session -t $TMUX_SESSION"
+echo "2. View benchmark log:"
+echo "   tail -f benchmark.log"
 echo ""
-echo "To check container logs:"
-echo "docker logs -f $CONTAINER_NAME"
+echo "3. Check container status:"
+echo "   docker ps | grep $CONTAINER_NAME"
+
+# Monitor container status with timeout
+echo -e "\nMonitoring container status..."
+TIMEOUT=259200  # 72 hours in seconds
+START_TIME=$(date +%s)
+
+while docker ps | grep -q $CONTAINER_NAME; do
+    CURRENT_TIME=$(date +%s)
+    ELAPSED_TIME=$((CURRENT_TIME - START_TIME))
+    
+    if [ $ELAPSED_TIME -gt $TIMEOUT ]; then
+        echo "Error: Benchmark exceeded maximum runtime of 72 hours"
+        docker stop $CONTAINER_NAME
+        docker logs --tail 100 $CONTAINER_NAME > benchmark_timeout.log
+        echo "Last 100 lines of logs saved to benchmark_timeout.log"
+        exit 1
+    fi
+    
+    echo -e "\nContainer is running. Recent output:"
+    docker logs --tail 5 $CONTAINER_NAME 2>&1
+    sleep 30
+done
+
+# Container has stopped - check status
+EXIT_CODE=$(docker inspect $CONTAINER_NAME --format='{{.State.ExitCode}}')
+
+if [ "$EXIT_CODE" = "0" ]; then
+    echo "Benchmark completed successfully!"
+    echo "Results are in benchmark_results.csv"
+    echo "Full logs are in benchmark.log"
+else
+    echo "Container exited with error code $EXIT_CODE"
+    echo "Last 50 lines of container logs:"
+    docker logs --tail 50 $CONTAINER_NAME
+fi
+
+# Cleanup
+docker stop $CONTAINER_NAME 2>/dev/null || true
+docker rm $CONTAINER_NAME 2>/dev/null || true
