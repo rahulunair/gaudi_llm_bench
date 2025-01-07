@@ -116,7 +116,9 @@ build_cached_container() {
         echo '📦 Installing additional requirements...' && \
         pip install -r /workspace/optimum-habana/examples/text-generation/requirements.txt 2>&1 && \
         pip install -r /workspace/optimum-habana/examples/text-generation/requirements_lm_eval.txt 2>&1 && \
-        echo '✅ Installation complete!'"; then
+        echo '✅ Installation complete!' && \
+        touch /workspace/.build_complete && \
+        exit 0"; then
         echo "Error: Failed to start build container"
         return 1
     fi
@@ -125,7 +127,7 @@ build_cached_container() {
     echo "Following build progress (Ctrl+C to stop watching, build will continue):"
     echo "================================================================================"
     
-    # Show logs in real-time with timeout
+    # Show logs in real-time
     docker logs -f $temp_container &
     LOGS_PID=$!
 
@@ -139,13 +141,35 @@ build_cached_container() {
     # Set up Ctrl+C handler
     trap build_ctrl_c INT
 
-    # Monitor build progress
+    # Monitor build progress with timeout
+    start_time=$(date +%s)
+    timeout=900  # 15 minutes timeout
+
     while docker ps -q --filter "name=$temp_container" >/dev/null; do
+        current_time=$(date +%s)
+        elapsed=$((current_time - start_time))
+        
+        # Check for build completion marker
+        if docker exec $temp_container test -f /workspace/.build_complete; then
+            echo -e "\n✅ Build completed successfully!"
+            break
+        fi
+        
+        # Check timeout
+        if [ $elapsed -gt $timeout ]; then
+            echo -e "\n❌ Build timed out after ${timeout} seconds"
+            docker stop $temp_container
+            docker logs $temp_container
+            docker rm $temp_container
+            return 1
+        fi
+        
+        # Restart logs if they died
         if ! kill -0 $LOGS_PID 2>/dev/null; then
-            # If logs process died but container is still running, restart it
             docker logs -f $temp_container &
             LOGS_PID=$!
         fi
+        
         sleep 2
     done
 
@@ -165,6 +189,7 @@ build_cached_container() {
     echo -e "\n📦 Build successful! Creating cached image: $CACHED_IMAGE_NAME"
     docker commit $temp_container $CACHED_IMAGE_NAME
     docker rm $temp_container
+    rm -f .build_complete 2>/dev/null || true
     
     echo "✅ Successfully created cached image"
     return 0
