@@ -6,7 +6,8 @@ set -o pipefail  # Exit on pipe failure
 
 # Configuration
 CONTAINER_NAME="inference_perf"
-DOCKER_IMAGE="vault.habana.ai/gaudi-docker/1.18.0/ubuntu22.04/habanalabs/pytorch-installer-2.4.0:latest"
+BASE_DOCKER_IMAGE="vault.habana.ai/gaudi-docker/1.18.0/ubuntu22.04/habanalabs/pytorch-installer-2.4.0:latest"
+CACHED_IMAGE_NAME="gaudi-bench:cached"
 MOUNT_PATH="/scratch-1:/mnt"
 HOME_MOUNT="/home/sdp:/root"
 WORKSPACE_DIR=$(pwd)
@@ -39,7 +40,7 @@ check_network() {
     done
 
     # Test Docker registry access directly
-    if ! docker pull $DOCKER_IMAGE > /dev/null 2>&1; then
+    if ! docker pull $BASE_DOCKER_IMAGE > /dev/null 2>&1; then
         echo "Error: Cannot access Docker registry at vault.habana.ai"
         echo "Please check your Docker configuration and network connection"
         return 1
@@ -83,6 +84,71 @@ check_container_state() {
         echo "Error: Container is already running"
         return 1
     fi
+}
+
+# Function to build and cache container
+build_cached_container() {
+    echo "Building cached container with dependencies..."
+    
+    # Start temporary container
+    local temp_container="temp_build_$$"
+    if ! docker run -d --name=$temp_container \
+        --runtime=habana \
+        -e HABANA_VISIBLE_DEVICES=all \
+        -v $WORKSPACE_DIR:/workspace \
+        $BASE_DOCKER_IMAGE \
+        /bin/bash -c "
+        cd /workspace && \
+        python -m venv /workspace/venv && \
+        . /workspace/venv/bin/activate && \
+        pip install --upgrade-strategy eager optimum[habana] transformers && \
+        if [ -d 'optimum-habana' ]; then
+            cd optimum-habana && git fetch && git checkout v1.14.0 && cd ..
+        else
+            git clone https://github.com/huggingface/optimum-habana && \
+            cd optimum-habana && git checkout v1.14.0 && cd ..
+        fi && \
+        pip install git+https://github.com/HabanaAI/DeepSpeed.git@1.18.0 && \
+        pip install -r /workspace/optimum-habana/examples/text-generation/requirements.txt && \
+        pip install -r /workspace/optimum-habana/examples/text-generation/requirements_lm_eval.txt && \
+        sleep 5"; then
+        echo "Error: Failed to start build container"
+        return 1
+    fi
+
+    # Wait for installation to complete
+    echo "Waiting for package installation to complete..."
+    sleep 10
+    while docker ps -q --filter "name=$temp_container" >/dev/null; do
+        sleep 5
+    done
+
+    # Check if build was successful
+    if [ "$(docker inspect -f '{{.State.ExitCode}}' $temp_container)" != "0" ]; then
+        echo "Error: Build container failed"
+        docker logs $temp_container
+        docker rm $temp_container
+        return 1
+    fi
+
+    # Commit the container as a new image
+    echo "Committing container as new image: $CACHED_IMAGE_NAME"
+    docker commit $temp_container $CACHED_IMAGE_NAME
+    docker rm $temp_container
+    
+    echo "Successfully created cached image"
+    return 0
+}
+
+# Function to check if cached image exists and is valid
+check_cached_image() {
+    if ! docker image inspect $CACHED_IMAGE_NAME >/dev/null 2>&1; then
+        echo "Cached image not found"
+        return 1
+    fi
+    
+    # Add additional validation if needed
+    return 0
 }
 
 # Check for HuggingFace token
@@ -168,8 +234,22 @@ if ! check_container_state; then
     exit 1
 fi
 
-# Container already pulled during network check, proceed with launch
-echo "Launching container..."
+# Check for cached image or build it
+if ! check_cached_image; then
+    echo "Building new cached image..."
+    if ! build_cached_container; then
+        echo "Failed to build cached image, falling back to base image"
+        DOCKER_IMAGE=$BASE_DOCKER_IMAGE
+    else
+        DOCKER_IMAGE=$CACHED_IMAGE_NAME
+    fi
+else
+    echo "Using cached image"
+    DOCKER_IMAGE=$CACHED_IMAGE_NAME
+fi
+
+# Launch container for benchmark
+echo "Launching container for benchmark..."
 if ! docker run -d --runtime=habana \
     -e HABANA_VISIBLE_DEVICES=all \
     -e OMPI_MCA_btl_vader_single_copy_mechanism=none \
@@ -184,15 +264,8 @@ if ! docker run -d --runtime=habana \
     $DOCKER_IMAGE \
     /bin/bash -c "
     cd /workspace && \
-    pip install --upgrade-strategy eager optimum[habana] transformers && \
-    git clone https://github.com/huggingface/optimum-habana && \
-    cd /workspace && \
-    pip install git+https://github.com/HabanaAI/DeepSpeed.git@1.18.0 && \
-    pip install -r /workspace/optimum-habana/examples/text-generation/requirements.txt && \
-    pip install -r /workspace/optimum-habana/examples/text-generation/requirements_lm_eval.txt && \
+    . /workspace/venv/bin/activate && \
     export HF_HOME=/mnt/huggingface && \
-    ls -la /workspace && \
-    cat /workspace/benchmark_config.json && \
     python /workspace/run_benchmarks.py 2>&1 | tee /workspace/benchmark.log"; then
     
     echo "Error: Failed to start container"

@@ -156,29 +156,32 @@ def check_gaudi_cards(required_cards: int) -> bool:
 def check_system_requirements(required_cards: int = 1):
     """Check if system meets requirements"""
     try:
-        # Check if docker is available
-        result = subprocess.run(["docker", "--version"], capture_output=True, text=True)
-        if result.returncode != 0:
-            raise RuntimeError("Docker is not available")
+        # Check if we're running inside a container
+        in_container = os.path.exists('/.dockerenv')
+        
+        # Only check Docker if we're not in a container
+        if not in_container:
+            logging.info("Checking Docker installation...")
+            result = subprocess.run(["docker", "--version"], capture_output=True, text=True)
+            if result.returncode != 0:
+                raise RuntimeError("Docker is not installed or not in PATH")
+            logging.info(f"Found Docker: {result.stdout.strip()}")
 
-        # Check if Habana runtime is available
-        result = subprocess.run(["docker", "info"], capture_output=True, text=True)
-        if "habana" not in result.stdout.lower():
-            raise RuntimeError("Habana runtime not found in Docker")
-
-        # Check disk space
-        result = subprocess.run(["df", "-h", "/"], capture_output=True, text=True)
-        if result.returncode == 0:
-            # Parse available space (this is a simple check, might need adjustment)
-            available = int(result.stdout.split("\n")[1].split()[3].rstrip("G"))
-            if available < 100:  # Less than 100GB
-                logging.warning("Low disk space available")
-
-        # Check Gaudi cards
+        # Check for Gaudi cards
         if not check_gaudi_cards(required_cards):
-            raise RuntimeError("Gaudi card validation failed")
+            raise RuntimeError(f"Required {required_cards} Gaudi cards not available")
+
+        # Check disk space (100GB minimum)
+        min_space_gb = 100
+        workspace_dir = os.path.dirname(os.path.abspath(__file__))
+        statvfs = os.statvfs(workspace_dir)
+        free_space_gb = (statvfs.f_frsize * statvfs.f_bavail) / (1024**3)
+        if free_space_gb < min_space_gb:
+            raise RuntimeError(f"Insufficient disk space. Required: {min_space_gb}GB, Available: {free_space_gb:.1f}GB")
+        logging.info(f"Disk space check passed. Available: {free_space_gb:.1f}GB")
 
         return True
+
     except Exception as e:
         logging.error(f"System requirements check failed: {str(e)}")
         logging.error(traceback.format_exc())
