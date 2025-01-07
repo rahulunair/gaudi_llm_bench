@@ -1,46 +1,27 @@
 {
     "models": [
         {
-            "name": "llama2-7b",
-            "model_id": "meta-llama/Llama-2-7b-hf",
-            "size": 7,
-            "cards_required": 1,
-            "configs": [
-                {"input_tokens": 128, "output_tokens": 128, "batch_size": 128},
-                {"input_tokens": 128, "output_tokens": 2048, "batch_size": 128},
-                {"input_tokens": 2048, "output_tokens": 2048, "batch_size": 128}
-            ]
-        },
-        {
-            "name": "llama2-70b",
-            "model_id": "meta-llama/Llama-2-70b-hf",
-            "size": 70,
-            "cards_required": 4,
-            "configs": [
-                {"batch_size": 1, "sequence_length": 512},
-                {"batch_size": 2, "sequence_length": 512}
-            ]
-        },
-        {
-            "name": "llama2-13b",
-            "model_id": "meta-llama/Llama-2-13b-hf",
-            "size": 13,
-            "cards_required": 2,
-            "configs": [
-                {"input_tokens": 128, "output_tokens": 128, "batch_size": 128},
-                {"input_tokens": 128, "output_tokens": 2048, "batch_size": 128},
-                {"input_tokens": 2048, "output_tokens": 2048, "batch_size": 128}
-            ]
-        },
-        {
-            "name": "llama2-11b",
-            "model_id": "meta-llama/Llama-2-11b-hf",
+            "name": "llama3.2-11b-vision",
+            "model_id": "meta-llama/Llama-3.2-11B-Vision",
             "size": 11,
             "cards_required": 1,
             "configs": [
-                {"batch_size": 1, "sequence_length": 512},
-                {"batch_size": 4, "sequence_length": 512},
-                {"batch_size": 8, "sequence_length": 512}
+                {"input_tokens": 128, "output_tokens": 128, "batch_size": 128},
+                {"input_tokens": 128, "output_tokens": 2048, "batch_size": 128},
+                {"input_tokens": 2048, "output_tokens": 128, "batch_size": 128},
+                {"input_tokens": 2048, "output_tokens": 2048, "batch_size": 128}
+            ]
+        },
+        {
+            "name": "llama3.2-90b-vision",
+            "model_id": "meta-llama/Llama-3.2-90B-Vision",
+            "size": 90,
+            "cards_required": 8,
+            "configs": [
+                {"input_tokens": 128, "output_tokens": 128, "batch_size": 128},
+                {"input_tokens": 128, "output_tokens": 2048, "batch_size": 128},
+                {"input_tokens": 2048, "output_tokens": 128, "batch_size": 128},
+                {"input_tokens": 2048, "output_tokens": 2048, "batch_size": 128}
             ]
         }
     ],
