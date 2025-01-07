@@ -28,7 +28,8 @@ check_disk_space() {
 
 # Function to check network connectivity
 check_network() {
-    local urls=("huggingface.co" "github.com" "vault.habana.ai")
+    # Only check essential services that don't require authentication
+    local urls=("huggingface.co" "github.com")
     for url in "${urls[@]}"; do
         if ! curl --silent --head --fail "https://${url}" >/dev/null; then
             echo "Error: Cannot connect to ${url}"
@@ -36,6 +37,14 @@ check_network() {
             return 1
         fi
     done
+
+    # Test Docker registry access directly
+    if ! docker pull $DOCKER_IMAGE > /dev/null 2>&1; then
+        echo "Error: Cannot access Docker registry at vault.habana.ai"
+        echo "Please check your Docker configuration and network connection"
+        return 1
+    fi
+
     return 0
 }
 
@@ -109,24 +118,13 @@ for path in "/scratch-1" "/home/sdp" "$WORKSPACE_DIR"; do
     fi
 done
 
-# Check network connectivity
+# Check network connectivity (including Docker registry)
 echo "Checking network connectivity..."
 if ! check_network; then
     exit 1
 fi
 
-# Pull the Docker image
-echo "Pulling Docker image..."
-if ! docker pull $DOCKER_IMAGE; then
-    echo "Error: Failed to pull Docker image"
-    exit 1
-fi
-
-# Stop and remove existing container if it exists
-docker stop $CONTAINER_NAME 2>/dev/null || true
-docker rm $CONTAINER_NAME 2>/dev/null || true
-
-# Launch the container
+# Container already pulled during network check, proceed with launch
 echo "Launching container..."
 if ! docker run -d --runtime=habana \
     -e HABANA_VISIBLE_DEVICES=all \
