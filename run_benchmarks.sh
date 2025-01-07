@@ -116,9 +116,7 @@ build_cached_container() {
         echo '📦 Installing additional requirements...' && \
         pip install -r /workspace/optimum-habana/examples/text-generation/requirements.txt 2>&1 && \
         pip install -r /workspace/optimum-habana/examples/text-generation/requirements_lm_eval.txt 2>&1 && \
-        echo '✅ Installation complete!' && \
-        touch /workspace/.build_complete && \
-        exit 0"; then
+        echo '✅ Installation complete!'"; then
         echo "Error: Failed to start build container"
         return 1
     fi
@@ -145,17 +143,25 @@ build_cached_container() {
     start_time=$(date +%s)
     timeout=900  # 15 minutes timeout
 
-    while docker ps -q --filter "name=$temp_container" >/dev/null; do
+    while true; do
+        # Check if container is still running
+        if ! docker ps -q --filter "name=$temp_container" >/dev/null; then
+            # Container has stopped, check exit code
+            exit_code=$(docker inspect -f '{{.State.ExitCode}}' $temp_container)
+            if [ "$exit_code" = "0" ]; then
+                echo -e "\n✅ Build completed successfully!"
+                break
+            else
+                echo -e "\n❌ Build failed with exit code $exit_code"
+                docker logs $temp_container
+                docker rm $temp_container
+                return 1
+            fi
+        fi
+
+        # Check timeout
         current_time=$(date +%s)
         elapsed=$((current_time - start_time))
-        
-        # Check for build completion marker
-        if docker exec $temp_container test -f /workspace/.build_complete; then
-            echo -e "\n✅ Build completed successfully!"
-            break
-        fi
-        
-        # Check timeout
         if [ $elapsed -gt $timeout ]; then
             echo -e "\n❌ Build timed out after ${timeout} seconds"
             docker stop $temp_container
@@ -177,19 +183,10 @@ build_cached_container() {
     kill $LOGS_PID 2>/dev/null || true
     trap - INT
 
-    # Check if build was successful
-    if [ "$(docker inspect -f '{{.State.ExitCode}}' $temp_container)" != "0" ]; then
-        echo -e "\n❌ Build failed! Container logs:"
-        docker logs $temp_container
-        docker rm $temp_container
-        return 1
-    fi
-
     # Commit the container as a new image
     echo -e "\n📦 Build successful! Creating cached image: $CACHED_IMAGE_NAME"
     docker commit $temp_container $CACHED_IMAGE_NAME
     docker rm $temp_container
-    rm -f .build_complete 2>/dev/null || true
     
     echo "✅ Successfully created cached image"
     return 0
