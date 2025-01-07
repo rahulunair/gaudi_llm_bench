@@ -82,78 +82,32 @@ def validate_config(config: Dict) -> bool:
         return False
 
 
-def check_gaudi_cards(required_cards: int) -> bool:
-    """Check if required number of Gaudi cards are available and healthy"""
+def check_gaudi_cards(required_cards=8):
+    """Check if required number of Gaudi cards are available and working."""
     try:
-        # Check if hl-smi is available
-        result = subprocess.run(["which", "hl-smi"], capture_output=True, text=True)
+        # Run hl-smi command to get card info
+        result = subprocess.run(['hl-smi'], capture_output=True, text=True)
         if result.returncode != 0:
-            raise RuntimeError("hl-smi not found. Are Gaudi drivers installed?")
+            raise RuntimeError(f"hl-smi command failed: {result.stderr}")
 
-        # Get hl-smi output
-        result = subprocess.run(["hl-smi"], capture_output=True, text=True)
-        if result.returncode != 0:
-            raise RuntimeError("Error running hl-smi command")
-
-        output = result.stdout
-
-        # Check driver version
-        if "Driver Version:" not in output:
-            raise RuntimeError("Could not find Gaudi driver version")
-
-        # Count available cards
-        card_count = output.count("HL-225")
+        # Count cards by looking for HL-225 entries
+        card_count = result.stdout.count('HL-225')
+        logging.info(f"Found {card_count} Gaudi cards")
+        
         if card_count < required_cards:
-            raise RuntimeError(
-                f"Not enough Gaudi cards. Required: {required_cards}, Found: {card_count}"
-            )
-
-        # Parse card details
-        cards = []
-        for line in output.split("\n"):
-            if "HL-225" in line:
-                cards.append(line)
-
-        # Check each card's status
-        for i, card in enumerate(cards):
-            # Check temperature (example threshold: 85°C)
-            temp = int(card.split()[2].rstrip("C"))
-            if temp > 85:
-                logging.warning(f"Card {i} temperature is high: {temp}°C")
-
-            # Check power usage
-            power_info = card.split()[6:8]
-            usage = int(power_info[0].rstrip("W"))
-            cap = int(power_info[2].rstrip("W"))
-            if usage > cap * 0.9:  # Warning if using >90% of power cap
-                logging.warning(f"Card {i} power usage is high: {usage}W/{cap}W")
-
-            # Check memory usage
-            mem_info = card.split()[11:14]
-            used = int(mem_info[0].rstrip("MiB"))
-            total = int(mem_info[2].rstrip("MiB"))
-            if used > total * 0.9:  # Warning if using >90% of memory
-                logging.warning(f"Card {i} memory usage is high: {used}MiB/{total}MiB")
-
-        logging.info(f"Found {card_count} Gaudi cards:")
-        logging.info(f"Driver Version: {output.split('Driver Version:')[1].split()[0]}")
-        for i, card in enumerate(cards):
-            temp = card.split()[2]
-            power = card.split()[6:8]
-            mem = card.split()[11:14]
-            logging.info(
-                f"Card {i}: Temp: {temp}, Power: {power[0]}/{power[2]}, Memory: {mem[0]}/{mem[2]}"
-            )
-
+            raise RuntimeError(f"Found only {card_count} cards, need {required_cards}")
+            
         return True
-
+        
+    except FileNotFoundError:
+        raise RuntimeError("hl-smi command not found. Are Habana drivers installed?")
     except Exception as e:
         logging.error(f"Gaudi card check failed: {str(e)}")
         logging.error(traceback.format_exc())
         return False
 
 
-def check_system_requirements(required_cards: int = 1):
+def check_system_requirements(required_cards=1):
     """Check if system meets requirements"""
     try:
         # Check if we're running inside a container

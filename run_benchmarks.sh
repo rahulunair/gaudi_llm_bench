@@ -106,11 +106,19 @@ if ! docker run -d --runtime=habana \
     pip install -r /workspace/optimum-habana/examples/text-generation/requirements.txt && \
     pip install -r /workspace/optimum-habana/examples/text-generation/requirements_lm_eval.txt && \
     export HF_HOME=/mnt/huggingface && \
-    python /workspace/run_benchmarks.py 2>&1 | tee /workspace/benchmark.log"; then
+    # The benchmark script is ready to run. Use:
+    # docker exec -it $CONTAINER_NAME bash
+    # cd /workspace && source venv/bin/activate
+    # python run_benchmarks.py
+    tail -f /dev/null"; then  # Keep container running
     
     echo "Error: Failed to start container"
     exit 1
 fi
 
-echo "Container started successfully. Following logs..."
-docker logs -f $CONTAINER_NAME
+echo -e "\n✅ Container setup complete!"
+echo -e "\nTo run the benchmark:"
+echo "1. Connect to container:    docker exec -it $CONTAINER_NAME bash"
+echo "2. Activate environment:    cd /workspace && source venv/bin/activate"
+echo "3. Run benchmark:           python run_benchmarks.py"
+echo -e "\nContainer will stay running until you stop it with: docker stop $CONTAINER_NAME"
