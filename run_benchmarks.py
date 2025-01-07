@@ -33,19 +33,23 @@ def run_benchmark_bf16(
         if cards_required > 1
         else "python"
     )
-    cmd = f"""{base_cmd} run_generation.py \
-    --model_name_or_path {model_name} \
-    --bf16 \
-    --use_hpu_graphs \
+    cmd = f"""HF_DATASETS_TRUST_REMOTE_CODE=true QUANT_CONFIG=./quantization_config/maxabs_quant.json TQDM_DISABLE=1 {base_cmd} \
+    run_generation.py --model_name_or_path {model_name} \
+    --attn_softmax_bf16 \
+    --trim_logits \
+    --warmup 2 \
     --use_kv_cache \
-    --batch_size {batch_size} \
+    --use_hpu_graphs \
+    --limit_hpu_graphs \
+    --bucket_size=128 \
+    --bucket_internal \
+    --bf16 \
     --max_input_tokens {input_tokens} \
     --max_new_tokens {output_tokens} \
-    --attn_softmax_bf16 \
-    --limit_hpu_graphs \
-    --reuse_cache \
-    --trim_logits \
-    --sdp_on_bf16"""
+    --batch_size {batch_size} \
+    --flash_attention_causal_mask \
+    --use_flash_attention \
+    --flash_attention_recompute"""
 
     print(f"Running command: {cmd}")
     start_time = time.time()
@@ -88,11 +92,21 @@ def quantize_model(model_name: str, cards_required: int) -> bool:
 
     cmd = f"""HF_DATASETS_TRUST_REMOTE_CODE=true QUANT_CONFIG=./quantization_config/maxabs_measure.json \
     TQDM_DISABLE=1 {base_cmd} \
-    run_lm_eval.py --model_name_or_path {model_name} --attn_softmax_bf16 \
-    --trim_logits --warmup 2 --use_kv_cache --use_hpu_graphs --limit_hpu_graphs \
-    --bucket_size=128 --bucket_internal --bf16 --batch_size 1 \
-    --flash_attention_causal_mask --use_flash_attention --flash_attention_recompute \
-    -o quant_measure_{model_name.split('/')[-1]}.txt"""
+    run_lm_eval.py --model_name_or_path {model_name} \
+    --attn_softmax_bf16 \
+    --trim_logits \
+    --warmup 2 \
+    --use_kv_cache \
+    --use_hpu_graphs \
+    --limit_hpu_graphs \
+    --bucket_size=128 \
+    --bucket_internal \
+    --bf16 \
+    --batch_size 1 \
+    --flash_attention_causal_mask \
+    --use_flash_attention \
+    --flash_attention_recompute \
+    -o quant_measure_{model_name.split('/')[-1]}.txt 2>&1 | tee -a /home/log_measur_quant.txt"""
 
     print(f"Running quantization command: {cmd}")
     stdout, stderr, returncode = run_command(cmd)
@@ -122,11 +136,21 @@ def run_benchmark_quantized(
     )
     cmd = f"""HF_DATASETS_TRUST_REMOTE_CODE=true QUANT_CONFIG=./quantization_config/maxabs_quant.json \
     TQDM_DISABLE=1 {base_cmd} run_generation.py --model_name_or_path {model_name} \
-    --attn_softmax_bf16 --trim_logits --warmup 2 --use_kv_cache --use_hpu_graphs \
-    --limit_hpu_graphs --bucket_size=128 --bucket_internal --bf16 \
-    --max_input_tokens {input_tokens} --max_new_tokens {output_tokens} \
-    --batch_size {batch_size} --flash_attention_causal_mask \
-    --use_flash_attention --flash_attention_recompute"""
+    --attn_softmax_bf16 \
+    --trim_logits \
+    --warmup 2 \
+    --use_kv_cache \
+    --use_hpu_graphs \
+    --limit_hpu_graphs \
+    --bucket_size=128 \
+    --bucket_internal \
+    --bf16 \
+    --max_input_tokens {input_tokens} \
+    --max_new_tokens {output_tokens} \
+    --batch_size {batch_size} \
+    --flash_attention_causal_mask \
+    --use_flash_attention \
+    --flash_attention_recompute"""
 
     print(f"Running quantized benchmark command: {cmd}")
     start_time = time.time()
@@ -212,10 +236,15 @@ def main():
 
         # Try quantization first
         quant_success = quantize_model(model["name"], model["cards_required"])
+        
+        if not quant_success:
+            print(f"\nQuantization failed for {model['name']}, will run in BF16 mode only")
 
         # For each configuration, run either quantized or BF16 benchmark
         for cfg in model["configs"]:
             result = None
+            
+            # Try quantized run if quantization was successful
             if quant_success:
                 print("\nAttempting quantized run...")
                 result = run_benchmark_quantized(
@@ -225,20 +254,15 @@ def main():
                     cfg["batch_size"],
                     model["cards_required"],
                 )
-
+                
                 if result:
                     print("Quantized run successful!")
                 else:
                     print("Quantized run failed, falling back to BF16...")
-                    result = run_benchmark_bf16(
-                        model["name"],
-                        cfg["input_tokens"],
-                        cfg["output_tokens"],
-                        cfg["batch_size"],
-                        model["cards_required"],
-                    )
-            else:
-                print("\nQuantization failed, running BF16 version...")
+
+            # If either quantization failed or quantized run failed, try BF16
+            if not quant_success or not result:
+                print("\nRunning BF16 version...")
                 result = run_benchmark_bf16(
                     model["name"],
                     cfg["input_tokens"],
@@ -265,6 +289,7 @@ def main():
                 print("-" * 50)
             else:
                 print(f"Failed to get results for {model['name']} with config: {cfg}")
+                print("Both quantized and BF16 runs failed for this configuration")
 
 
 if __name__ == "__main__":
