@@ -1,8 +1,8 @@
 {
     "models": [
         {
-            "name": "meta-llama/Llama-3.2-11B",
-            "size": 11,
+            "name": "meta-llama/Llama-2-7b-hf",
+            "size": 7,
             "cards_required": 1,
             "configs": [
                 {"input_tokens": 128, "output_tokens": 128, "batch_size": 128},
@@ -11,8 +11,8 @@
             ]
         },
         {
-            "name": "meta-llama/Llama-3.2-90B",
-            "size": 90,
+            "name": "meta-llama/Llama-2-70b-hf",
+            "size": 70,
             "cards_required": 8,
             "configs": [
                 {"input_tokens": 128, "output_tokens": 128, "batch_size": 128},
@@ -21,9 +21,9 @@
             ]
         },
         {
-            "name": "meta-llama/Llama-3.3-70B",
-            "size": 70,
-            "cards_required": 8,
+            "name": "meta-llama/Llama-2-13b-hf",
+            "size": 13,
+            "cards_required": 2,
             "configs": [
                 {"input_tokens": 128, "output_tokens": 128, "batch_size": 128},
                 {"input_tokens": 128, "output_tokens": 2048, "batch_size": 128},

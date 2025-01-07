@@ -438,15 +438,21 @@ def main():
         logging.info("Starting benchmark run")
 
         # Load configuration first to get max cards required
-        config_path = "benchmark_config.json"  # Look in current directory
+        workspace_dir = os.path.dirname(os.path.abspath(__file__))
+        config_path = os.path.join(workspace_dir, "benchmark_config.json")
+
+        logging.info(f"Looking for config file at: {config_path}")
         if not os.path.exists(config_path):
-            raise FileNotFoundError(f"Configuration file not found: {config_path}")
+            raise FileNotFoundError(f"Configuration file not found at: {config_path}")
 
         try:
             with open(config_path, "r") as f:
                 config = json.load(f)
+                logging.info("Successfully loaded configuration file")
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON in config file: {e}")
+        except Exception as e:
+            raise Exception(f"Error reading config file: {str(e)}")
 
         # Validate configuration
         if not validate_config(config):

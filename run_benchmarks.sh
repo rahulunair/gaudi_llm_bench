@@ -48,6 +48,43 @@ check_network() {
     return 0
 }
 
+# Function to check container state
+check_container_state() {
+    local container_id=$(docker ps -aqf "name=$CONTAINER_NAME")
+    if [ -z "$container_id" ]; then
+        echo "Container does not exist"
+        return 0
+    fi
+
+    local state=$(docker inspect -f '{{.State.Status}}' "$container_id")
+    local running=$(docker inspect -f '{{.State.Running}}' "$container_id")
+    local exit_code=$(docker inspect -f '{{.State.ExitCode}}' "$container_id")
+    
+    echo "Container state: $state"
+    echo "Running: $running"
+    echo "Exit code: $exit_code"
+    
+    if [ "$state" = "created" ]; then
+        echo "Found a stale container that was never started"
+        docker rm "$container_id"
+        return 0
+    elif [ "$state" = "exited" ]; then
+        if [ "$exit_code" = "0" ]; then
+            echo "Found a successfully completed container"
+            docker rm "$container_id"
+            return 0
+        else
+            echo "Found a failed container (exit code: $exit_code)"
+            echo "Preserving container for debugging"
+            echo "To remove it manually: docker rm $container_id"
+            return 1
+        fi
+    elif [ "$running" = "true" ]; then
+        echo "Error: Container is already running"
+        return 1
+    fi
+}
+
 # Check for HuggingFace token
 if [ -z "${HUGGING_FACE_HUB_TOKEN}" ]; then
     echo "Error: HUGGING_FACE_HUB_TOKEN environment variable is not set"
@@ -124,6 +161,13 @@ if ! check_network; then
     exit 1
 fi
 
+# Check for existing container
+echo "Checking for existing containers..."
+if ! check_container_state; then
+    echo "Please check the existing container before proceeding"
+    exit 1
+fi
+
 # Container already pulled during network check, proceed with launch
 echo "Launching container..."
 if ! docker run -d --runtime=habana \
@@ -142,63 +186,83 @@ if ! docker run -d --runtime=habana \
     cd /workspace && \
     pip install --upgrade-strategy eager optimum[habana] transformers && \
     git clone https://github.com/huggingface/optimum-habana && \
-    cd optimum-habana && git checkout v1.14.0 && \
+    cd /workspace && \
     pip install git+https://github.com/HabanaAI/DeepSpeed.git@1.18.0 && \
-    cd examples/text-generation/ && \
-    pip install -r requirements.txt && \
-    pip install -r requirements_lm_eval.txt && \
+    pip install -r /workspace/optimum-habana/examples/text-generation/requirements.txt && \
+    pip install -r /workspace/optimum-habana/examples/text-generation/requirements_lm_eval.txt && \
     export HF_HOME=/mnt/huggingface && \
+    ls -la /workspace && \
+    cat /workspace/benchmark_config.json && \
     python /workspace/run_benchmarks.py 2>&1 | tee /workspace/benchmark.log"; then
     
     echo "Error: Failed to start container"
     exit 1
 fi
 
-echo -e "\nContainer started. Use these commands to monitor progress:"
-echo "1. View live container logs:"
-echo "   docker logs -f $CONTAINER_NAME"
-echo ""
-echo "2. View benchmark log:"
-echo "   tail -f benchmark.log"
-echo ""
-echo "3. Check container status:"
-echo "   docker ps | grep $CONTAINER_NAME"
+echo -e "\nContainer started successfully!"
+echo -e "\nShowing live container output (Ctrl+C to stop watching, container will continue running):"
+echo "================================================================================"
 
-# Monitor container status with timeout
-echo -e "\nMonitoring container status..."
-TIMEOUT=259200  # 72 hours in seconds
-START_TIME=$(date +%s)
+# Show initial output
+sleep 2  # Give container a moment to start
+docker logs -f $CONTAINER_NAME &
+LOGS_PID=$!
 
+# Function to handle Ctrl+C
+ctrl_c() {
+    kill $LOGS_PID 2>/dev/null
+    echo -e "\n\nStopped watching logs. Container is still running."
+    echo "To view logs again:"
+    echo "1. Container logs:    docker logs -f $CONTAINER_NAME"
+    echo "2. Benchmark log:     tail -f benchmark.log"
+    echo "3. Container status:  docker ps | grep $CONTAINER_NAME"
+    echo ""
+    echo "Monitoring container status..."
+}
+
+# Set up Ctrl+C handler
+trap ctrl_c INT
+
+# Monitor container status while showing logs
 while docker ps | grep -q $CONTAINER_NAME; do
-    CURRENT_TIME=$(date +%s)
-    ELAPSED_TIME=$((CURRENT_TIME - START_TIME))
+    wait $LOGS_PID 2>/dev/null || true
     
-    if [ $ELAPSED_TIME -gt $TIMEOUT ]; then
-        echo "Error: Benchmark exceeded maximum runtime of 72 hours"
-        docker stop $CONTAINER_NAME
-        docker logs --tail 100 $CONTAINER_NAME > benchmark_timeout.log
-        echo "Last 100 lines of logs saved to benchmark_timeout.log"
-        exit 1
+    # If logs process died but container is still running, restart it
+    if ! kill -0 $LOGS_PID 2>/dev/null; then
+        docker logs -f $CONTAINER_NAME &
+        LOGS_PID=$!
     fi
     
-    echo -e "\nContainer is running. Recent output:"
-    docker logs --tail 5 $CONTAINER_NAME 2>&1
-    sleep 30
+    sleep 5
 done
 
 # Container has stopped - check status
+kill $LOGS_PID 2>/dev/null || true
+echo -e "\nContainer has finished."
 EXIT_CODE=$(docker inspect $CONTAINER_NAME --format='{{.State.ExitCode}}')
 
-if [ "$EXIT_CODE" = "0" ]; then
+# Check both container exit code and benchmark log for errors
+BENCHMARK_FAILED=0
+if grep -q "CRITICAL" benchmark.log 2>/dev/null; then
+    BENCHMARK_FAILED=1
+fi
+
+if [ "$EXIT_CODE" = "0" ] && [ "$BENCHMARK_FAILED" = "0" ]; then
     echo "Benchmark completed successfully!"
     echo "Results are in benchmark_results.csv"
     echo "Full logs are in benchmark.log"
+    docker rm $CONTAINER_NAME
 else
-    echo "Container exited with error code $EXIT_CODE"
+    echo "Benchmark failed!"
+    if [ "$BENCHMARK_FAILED" = "1" ]; then
+        echo "Critical errors found in benchmark.log:"
+        grep "CRITICAL" benchmark.log
+    fi
+    echo "Container exited with code $EXIT_CODE"
     echo "Last 50 lines of container logs:"
     docker logs --tail 50 $CONTAINER_NAME
+    echo ""
+    echo "Container preserved for debugging"
+    echo "To remove it manually: docker rm $CONTAINER_NAME"
+    exit 1
 fi
-
-# Cleanup
-docker stop $CONTAINER_NAME 2>/dev/null || true
-docker rm $CONTAINER_NAME 2>/dev/null || true
