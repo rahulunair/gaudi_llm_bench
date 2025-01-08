@@ -1,4 +1,3 @@
-# https://www.intel.com/content/www/us/en/developer/platform/gaudi/model-performance-gaudi2-inference.html
 {
     "models": [
         {
@@ -22,7 +21,7 @@
                 {"input_tokens": 128, "output_tokens": 128, "batch_size": 1792},
                 {"input_tokens": 128, "output_tokens": 2048, "batch_size": 256},
                 {"input_tokens": 2048, "output_tokens": 128, "batch_size": 142},
-                {"input_tokens": 2048, "output_tokens": 2048, "batch_size": 139}
+                {"input_tokens": 2048, "output_tokens": 2048, "batch_size": 1}
             ]
         }
     ],

@@ -7,8 +7,8 @@ set -o pipefail  # Exit on pipe failure
 # Configuration
 CONTAINER_NAME="inference_perf"
 DOCKER_IMAGE="vault.habana.ai/gaudi-docker/1.18.0/ubuntu22.04/habanalabs/pytorch-installer-2.4.0:latest"
-MOUNT_PATH="/scratch-1:/mnt"
-HOME_MOUNT="/home/sdp:/root"
+MOUNT_PATH="/tmp:/mnt"
+HOME_MOUNT="$HOME:/root"
 WORKSPACE_DIR=$(pwd)
 MIN_DISK_SPACE_GB=100  # Minimum required disk space in GB
 
@@ -91,26 +91,20 @@ if ! docker run -d --runtime=habana \
     -v $HOME_MOUNT \
     -v $WORKSPACE_DIR:/workspace \
     $DOCKER_IMAGE \
-    #python -m venv /workspace/venv && \
-    #. /workspace/venv/bin/activate && \
-    /bin/bash -c "
+    /bin/bash -c "mkdir -p /workspace && \
     cd /workspace && \
-    pip install --upgrade-strategy eager "optimum[habana]==1.14.1" && \
-    if [ -d 'optimum-habana' ]; then
-        cd optimum-habana && git fetch && git checkout v1.14.0 && cd ..
-    else
-        git clone https://github.com/huggingface/optimum-habana && \
-        cd optimum-habana && git checkout v1.14.0 && cd ..
+    pip install --upgrade-strategy eager 'optimum[habana]==1.14.1' && \
+    if [ -d 'optimum-habana' ]; then \
+        cd optimum-habana && git fetch && git checkout v1.14.0 && cd ..; \
+    else \
+        git clone https://github.com/huggingface/optimum-habana.git && \
+        cd optimum-habana && git checkout v1.14.0 && cd ..; \
     fi && \
     pip install git+https://github.com/HabanaAI/DeepSpeed.git@1.18.0 && \
     pip install -r /workspace/optimum-habana/examples/text-generation/requirements.txt && \
     pip install -r /workspace/optimum-habana/examples/text-generation/requirements_lm_eval.txt && \
     export HF_HOME=/mnt/huggingface && \
-    # The benchmark script is ready to run. Use:
-    # docker exec -it $CONTAINER_NAME bash
-    # cd /workspace && source venv/bin/activate
-    # python run_benchmarks.py
-    tail -f /dev/null"; then  # Keep container running
+    tail -f /dev/null"; then
 
     echo "Error: Failed to start container"
     exit 1
