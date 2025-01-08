@@ -79,6 +79,7 @@ docker run -d --runtime=habana \
     $DOCKER_IMAGE \
     /bin/bash -c "cd /workspace && \
     echo 'Installing optimum-habana...' && \
+    pip install 'transformers==4.34.1' && \
     pip install --upgrade-strategy eager 'optimum[habana]==1.14.1' && \
     echo 'Setting up optimum-habana repository...' && \
     if [ -d 'optimum-habana' ]; then \
