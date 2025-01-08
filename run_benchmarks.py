@@ -54,16 +54,16 @@ def validate_config(config: Dict) -> bool:
             raise ValueError("No models specified in configuration")
 
         for model in config["models"]:
-            model_fields = ["name", "size", "cards_required", "configs"]
+            model_fields = ["model_id", "size", "cards_required", "configs"]
             for field in model_fields:
                 if field not in model:
                     raise ValueError(
-                        f"Missing required field '{field}' in model: {model['name']}"
+                        f"Missing required field '{field}' in model: {model['model_id']}"
                     )
 
             if not model["configs"]:
                 raise ValueError(
-                    f"No configurations specified for model: {model['name']}"
+                    f"No configurations specified for model: {model['model_id']}"
                 )
 
             for cfg in model["configs"]:
@@ -71,7 +71,7 @@ def validate_config(config: Dict) -> bool:
                 for field in config_fields:
                     if field not in cfg:
                         raise ValueError(
-                            f"Missing required field '{field}' in config for model: {model['name']}"
+                            f"Missing required field '{field}' in config for model: {model['model_id']}"
                         )
 
         return True
@@ -152,45 +152,42 @@ def download_models(models: List[Dict]) -> bool:
     failed_models = []
 
     for model in models:
-        model_name = model["name"]
-        logging.info(f"\nDownloading {model_name}...")
+        model_id = model["model_id"]  # Use model_id instead of name
+        logging.info(f"\nDownloading {model_id}...")
         try:
             # Try to load tokenizer first as it's smaller
-            logging.info(f"Downloading tokenizer for {model_name}")
+            logging.info(f"Downloading tokenizer for {model_id}")
             tokenizer = AutoTokenizer.from_pretrained(
-                model_name,
+                model_id,
                 trust_remote_code=True,
-                use_auth_token=os.environ.get("HUGGING_FACE_HUB_TOKEN"),
-                timeout=60,  # Add timeout
+                token=os.environ.get("HUGGING_FACE_HUB_TOKEN"),  # Updated from use_auth_token
+                timeout=60,
             )
 
             # Then try to load model config (without downloading weights)
-            logging.info(f"Validating model config for {model_name}")
+            logging.info(f"Validating model config for {model_id}")
             config = AutoModelForCausalLM.from_pretrained(
-                model_name,
+                model_id,
                 trust_remote_code=True,
-                use_auth_token=os.environ.get("HUGGING_FACE_HUB_TOKEN"),
-                config_only=True,
-                timeout=60,  # Add timeout
+                token=os.environ.get("HUGGING_FACE_HUB_TOKEN"),  # Updated from use_auth_token
+                timeout=60,
             )
 
             # Validate model size if available in config
             if hasattr(config, "num_parameters"):
                 expected_size = model["size"] * 1e9  # Convert B to parameters
                 actual_size = config.num_parameters
-                if (
-                    abs(expected_size - actual_size) / expected_size > 0.1
-                ):  # 10% tolerance
-                    logging.warning(f"Model size mismatch for {model_name}")
+                if abs(expected_size - actual_size) / expected_size > 0.1:  # 10% tolerance
+                    logging.warning(f"Model size mismatch for {model_id}")
                     logging.warning(
                         f"Expected: {model['size']}B, Actual: {actual_size/1e9:.1f}B"
                     )
 
-            logging.info(f"✓ Successfully validated {model_name}")
+            logging.info(f"✓ Successfully validated {model_id}")
 
         except Exception as e:
-            logging.error(f"✗ Error downloading {model_name}: {str(e)}")
-            failed_models.append(model_name)
+            logging.error(f"✗ Error downloading {model_id}: {str(e)}")
+            failed_models.append(model_id)
             success = False
 
     if failed_models:
@@ -472,15 +469,15 @@ def main():
         # Run benchmarks for each model
         for model in models:
             logging.info(f"\n{'='*50}")
-            logging.info(f"Starting benchmarks for {model['name']} ({model['size']}B)")
+            logging.info(f"Starting benchmarks for {model['model_id']} ({model['size']}B)")
             logging.info(f"{'='*50}")
 
             # Try quantization first
-            quant_success = quantize_model(model["name"], model["cards_required"])
+            quant_success = quantize_model(model["model_id"], model["cards_required"])
 
             if not quant_success:
                 logging.info(
-                    f"\nQuantization failed for {model['name']}, will run in BF16 mode only"
+                    f"\nQuantization failed for {model['model_id']}, will run in BF16 mode only"
                 )
 
             # For each configuration, run either quantized or BF16 benchmark
@@ -491,7 +488,7 @@ def main():
                 if quant_success:
                     logging.info("\nAttempting quantized run...")
                     result = run_benchmark_quantized(
-                        model["name"],
+                        model["model_id"],
                         cfg["input_tokens"],
                         cfg["output_tokens"],
                         cfg["batch_size"],
@@ -507,7 +504,7 @@ def main():
                 if not quant_success or not result:
                     logging.info("\nRunning BF16 version...")
                     result = run_benchmark_bf16(
-                        model["name"],
+                        model["model_id"],
                         cfg["input_tokens"],
                         cfg["output_tokens"],
                         cfg["batch_size"],
@@ -523,7 +520,7 @@ def main():
                     except Exception as e:
                         logging.error(f"Error writing results: {e}")
 
-                    logging.info(f"\nResults for {model['name']}:")
+                    logging.info(f"\nResults for {model['model_id']}:")
                     logging.info(f"Mode: {result['mode']}")
                     logging.info(f"Input tokens: {cfg['input_tokens']}")
                     logging.info(f"Output tokens: {cfg['output_tokens']}")
@@ -532,7 +529,7 @@ def main():
                     logging.info("-" * 50)
                 else:
                     logging.info(
-                        f"Failed to get results for {model['name']} with config: {cfg}"
+                        f"Failed to get results for {model['model_id']} with config: {cfg}"
                     )
                     logging.info(
                         "Both quantized and BF16 runs failed for this configuration"
