@@ -1,3 +1,4 @@
+# https://www.intel.com/content/www/us/en/developer/platform/gaudi/model-performance-gaudi2-inference.html
 {
     "models": [
         {
@@ -6,10 +7,10 @@
             "size": 11,
             "cards_required": 1,
             "configs": [
-                {"input_tokens": 128, "output_tokens": 128, "batch_size": 128},
-                {"input_tokens": 128, "output_tokens": 2048, "batch_size": 128},
-                {"input_tokens": 2048, "output_tokens": 128, "batch_size": 128},
-                {"input_tokens": 2048, "output_tokens": 2048, "batch_size": 128}
+                {"input_tokens": 128, "output_tokens": 128, "batch_size": 2816},
+                {"input_tokens": 128, "output_tokens": 2048, "batch_size": 512},
+                {"input_tokens": 2048, "output_tokens": 128, "batch_size": 179},
+                {"input_tokens": 2048, "output_tokens": 2048, "batch_size": 256}
             ]
         },
         {
@@ -18,10 +19,10 @@
             "size": 90,
             "cards_required": 8,
             "configs": [
-                {"input_tokens": 128, "output_tokens": 128, "batch_size": 128},
-                {"input_tokens": 128, "output_tokens": 2048, "batch_size": 128},
-                {"input_tokens": 2048, "output_tokens": 128, "batch_size": 128},
-                {"input_tokens": 2048, "output_tokens": 2048, "batch_size": 128}
+                {"input_tokens": 128, "output_tokens": 128, "batch_size": 1792},
+                {"input_tokens": 128, "output_tokens": 2048, "batch_size": 256},
+                {"input_tokens": 2048, "output_tokens": 128, "batch_size": 142},
+                {"input_tokens": 2048, "output_tokens": 2048, "batch_size": 139}
             ]
         }
     ],

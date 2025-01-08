@@ -91,11 +91,11 @@ if ! docker run -d --runtime=habana \
     -v $HOME_MOUNT \
     -v $WORKSPACE_DIR:/workspace \
     $DOCKER_IMAGE \
+    #python -m venv /workspace/venv && \
+    #. /workspace/venv/bin/activate && \
     /bin/bash -c "
     cd /workspace && \
-    python -m venv /workspace/venv && \
-    . /workspace/venv/bin/activate && \
-    pip install --upgrade-strategy eager optimum[habana] transformers && \
+    pip install --upgrade-strategy eager "optimum[habana]==1.14.1" && \
     if [ -d 'optimum-habana' ]; then
         cd optimum-habana && git fetch && git checkout v1.14.0 && cd ..
     else
@@ -111,7 +111,7 @@ if ! docker run -d --runtime=habana \
     # cd /workspace && source venv/bin/activate
     # python run_benchmarks.py
     tail -f /dev/null"; then  # Keep container running
-    
+
     echo "Error: Failed to start container"
     exit 1
 fi
